@@ -1,4 +1,3 @@
-```markdown
 # Ollama Benchmark Script
 
 This project benchmarks the performance of various large language models using the Ollama platform. The script automates model downloads, runs benchmarks, and outputs the performance metrics to identify the fastest model for your use case.
