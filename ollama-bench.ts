@@ -1,8 +1,18 @@
 import ollama from 'ollama';
 
+/**
+ * Represents the available color codes for text coloring.
+ */
 type Color = 'reset' | 'green' | 'yellow' | 'red' | 'cyan' | 'magenta' | 'blue';
+
+/**
+ * Represents the available emoji keys.
+ */
 type Emoji = 'rocket' | 'check' | 'error' | 'hourglass' | 'star' | 'trophy' | 'gear';
 
+/**
+ * Object containing ANSI color codes for text coloring.
+ */
 const colors: Record<Color, string> = {
   reset: '\x1b[0m',
   green: '\x1b[32m',
@@ -13,6 +23,9 @@ const colors: Record<Color, string> = {
   blue: '\x1b[34m',
 };
 
+/**
+ * Object containing emoji characters for various status indicators.
+ */
 const emojis: Record<Emoji, string> = {
   rocket: '🚀',
   check: '✅',
@@ -23,10 +36,22 @@ const emojis: Record<Emoji, string> = {
   gear: '⚙️',
 };
 
+/**
+ * Applies color to the given text.
+ * @param text - The text to colorize.
+ * @param color - The color to apply.
+ * @returns The colorized text.
+ */
 function colorize(text: string, color: Color): string {
   return `${colors[color]}${text}${colors.reset}`;
 }
 
+/**
+ * Creates a loading animation for the console.
+ * @param operation - The operation being performed.
+ * @param model - The model being processed.
+ * @returns An interval ID for the animation.
+ */
 function createLoadingAnimation(operation: string, model: string): NodeJS.Timeout {
   const frames: string[] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let i = 0;
@@ -41,6 +66,10 @@ function createLoadingAnimation(operation: string, model: string): NodeJS.Timeou
   }, 100);
 }
 
+/**
+ * Pulls a model from Ollama.
+ * @param model - The name of the model to pull.
+ */
 async function pullModel(model: string): Promise<void> {
   console.log(colorize(`${emojis.rocket} Initiating pull for ${model}...`, 'yellow'));
   const loadingAnimation = createLoadingAnimation('Pulling', model);
@@ -62,11 +91,19 @@ async function pullModel(model: string): Promise<void> {
   }
 }
 
+/**
+ * Represents the result of a model benchmark.
+ */
 interface BenchmarkResult {
   model: string;
   tokensPerSecond: number;
 }
 
+/**
+ * Benchmarks a model's performance.
+ * @param model - The name of the model to benchmark.
+ * @returns A promise that resolves to the benchmark result.
+ */
 async function benchmarkModel(model: string): Promise<BenchmarkResult> {
   const prompt = "Explain the theory of relativity in simple terms.";
   console.log(colorize(`${emojis.hourglass} Initiating benchmark for ${model}...`, 'cyan'));
@@ -97,6 +134,9 @@ async function benchmarkModel(model: string): Promise<BenchmarkResult> {
   }
 }
 
+/**
+ * The main function that orchestrates the model pulling and benchmarking process.
+ */
 export async function main(): Promise<void> {
   const models = process.argv.slice(2);
 
@@ -130,5 +170,3 @@ export async function main(): Promise<void> {
   console.log(colorize(`${emojis.trophy} Best performing model:`, 'magenta'));
   console.log(colorize(`  ${bestModel.model} with ${bestModel.tokensPerSecond.toFixed(2)} tokens/second`, 'magenta'));
 }
-
-export default { main };
