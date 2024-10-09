@@ -1,0 +1,7 @@
+{
+    "name": "@dalist/ollama-bench",
+    "version": "1.0.0",
+    "exports": {
+        ".": "./ollama-bench.ts"
+    } 
+}

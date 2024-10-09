@@ -1,6 +1,9 @@
 import ollama from 'ollama';
 
-const colors = {
+type Color = 'reset' | 'green' | 'yellow' | 'red' | 'cyan' | 'magenta' | 'blue';
+type Emoji = 'rocket' | 'check' | 'error' | 'hourglass' | 'star' | 'trophy' | 'gear';
+
+const colors: Record<Color, string> = {
   reset: '\x1b[0m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
@@ -10,7 +13,7 @@ const colors = {
   blue: '\x1b[34m',
 };
 
-const emojis = {
+const emojis: Record<Emoji, string> = {
   rocket: '🚀',
   check: '✅',
   error: '❌',
@@ -20,12 +23,12 @@ const emojis = {
   gear: '⚙️',
 };
 
-function colorize(text, color) {
+function colorize(text: string, color: Color): string {
   return `${colors[color]}${text}${colors.reset}`;
 }
 
-function createLoadingAnimation(operation, model) {
-  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+function createLoadingAnimation(operation: string, model: string): NodeJS.Timeout {
+  const frames: string[] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let i = 0;
   let dots = 0;
   return setInterval(() => {
@@ -38,7 +41,7 @@ function createLoadingAnimation(operation, model) {
   }, 100);
 }
 
-async function pullModel(model) {
+async function pullModel(model: string): Promise<void> {
   console.log(colorize(`${emojis.rocket} Initiating pull for ${model}...`, 'yellow'));
   const loadingAnimation = createLoadingAnimation('Pulling', model);
   try {
@@ -55,11 +58,16 @@ async function pullModel(model) {
     }
   } catch (error) {
     clearInterval(loadingAnimation);
-    console.log(`\r${colorize(`${emojis.error} Error pulling ${model}: ${error.message}`, 'red')}     `);
+    console.log(`\r${colorize(`${emojis.error} Error pulling ${model}: ${(error as Error).message}`, 'red')}     `);
   }
 }
 
-async function benchmarkModel(model) {
+interface BenchmarkResult {
+  model: string;
+  tokensPerSecond: number;
+}
+
+async function benchmarkModel(model: string): Promise<BenchmarkResult> {
   const prompt = "Explain the theory of relativity in simple terms.";
   console.log(colorize(`${emojis.hourglass} Initiating benchmark for ${model}...`, 'cyan'));
   const loadingAnimation = createLoadingAnimation('Benchmarking', model);
@@ -84,12 +92,12 @@ async function benchmarkModel(model) {
     return { model, tokensPerSecond };
   } catch (error) {
     clearInterval(loadingAnimation);
-    console.log(`\r${colorize(`${emojis.error} Error benchmarking ${model}: ${error.message}`, 'red')}     `);
+    console.log(`\r${colorize(`${emojis.error} Error benchmarking ${model}: ${(error as Error).message}`, 'red')}     `);
     return { model, tokensPerSecond: 0 };
   }
 }
 
-async function main() {
+export async function main(): Promise<void> {
   const models = process.argv.slice(2);
 
   if (models.length === 0) {
@@ -108,7 +116,7 @@ async function main() {
   console.log();
 
   // Benchmark models
-  const results = [];
+  const results: BenchmarkResult[] = [];
   for (const model of models) {
     const result = await benchmarkModel(model);
     results.push(result);
@@ -123,4 +131,4 @@ async function main() {
   console.log(colorize(`  ${bestModel.model} with ${bestModel.tokensPerSecond.toFixed(2)} tokens/second`, 'magenta'));
 }
 
-main().catch(console.error);
+export default { main };
