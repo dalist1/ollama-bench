@@ -1,22 +1,31 @@
 {
-    "name": "@dalist/ollama-bench",
-    "version": "1.0.2",
+    "name": "ollama-bench",
+    "version": "1.0.0",
+    "description": "A CLI tool to benchmark Ollama models performance",
+    "main": "dist/index.js",
     "type": "module",
     "bin": {
-        "ollama-bench": "./dist/index.js"
+        "ollama-benchmark": "./dist/index.js"
     },
-    "files": [
-        "dist"
-    ],
     "scripts": {
         "build": "tsc",
-        "prepublishOnly": "npm run build"
+        "start": "node dist/index.js",
+        "dev": "tsc && node dist/index.js"
+    },
+    "keywords": ["ollama", "benchmark", "ai", "models", "cli"],
+    "author": "dalist1",
+    "license": "MIT",
+    "dependencies": {
+        "ollama": "latest"
     },
     "devDependencies": {
-        "@types/node": "^20.0.0",
-        "typescript": "^5.0.0"
+        "@types/node": "^20.17.5",
+        "typescript": "^5.6.3"
     },
-    "dependencies": {
-        "ollama": "^0.5.9"
+    "engines": {
+        "node": ">=14.0.0"
+    },
+    "publishConfig": {
+        "access": "public"
     }
 }

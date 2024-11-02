@@ -1,46 +1,50 @@
 # Ollama Benchmark Script
 
-This project benchmarks the performance of various large language models using the Ollama platform. The script automates model downloads, runs benchmarks, and outputs the performance metrics to identify the fastest model for your use case.
+A command-line tool to benchmark and compare the performance of Ollama language models. Measures tokens per second, memory usage, and total processing time.
 
 ## Setup
 
-Follow the instructions below to set up Ollama on your platform and run the benchmark script:
-
 ### 1. Install Ollama
 
-- **macOS:** [Download Ollama](https://ollama.com/download/Ollama-darwin.zip)
-- **Windows Preview:** [Download Ollama](https://ollama.com/download/OllamaSetup.exe)
-- **Linux:** Run the following command:
+Choose your platform:
 
+- **Windows:** [Download Installer](https://ollama.com/download/OllamaSetup.exe)
+- **macOS:** [Download App](https://ollama.com/download/Ollama-darwin.zip)
+- **Linux:** Run:
   ```bash
   curl -fsSL https://ollama.com/install.sh | sh
   ```
+- **Docker:** Pull and run:
+  ```bash
+  docker pull ollama/ollama
+  docker run -d -v ollama:/root/.ollama -p 11434:11434 ollama/ollama
+  ```
 
-  For manual installation instructions, see the [Linux guide](https://github.com/ollama/ollama/blob/main/docs/linux.md).
-- **Docker:** Use the [official Ollama Docker image](https://hub.docker.com/r/ollama/ollama).
+### 2. Install Benchmark Tool
 
-### 2. Start the Ollama Server
-
-To serve models locally, start the Ollama server with the command:
-
+Install globally:
 ```bash
-ollama serve
+npm install -g ollama-benchmark
 ```
 
-### 3. Run the Benchmark Script
-
-After setting up the server, you can run the benchmark script using Node.js. The script will automatically pull the specified models and benchmark their performance.
-
+Or run directly with npx:
 ```bash
-node ollama-bench.js <model1> <model2> <model3>
+npx ollama-benchmark <model1> [model2] [model3]
 ```
 
-For example, to benchmark `llama3.2` and `gemma2` models:
+## Usage
 
 ```bash
-node ollama-bench.js llama3.2 gemma2
+# Using global installation
+ollama-benchmark smollm:135m qwen2.5:0.5b
+
+# Using npx (no installation required)
+npx ollama-benchmark smollm:135m qwen2.5:0.5b
 ```
 
-## Results
 
-The script outputs benchmark results such as total time, tokens generated, and tokens per second for each model, and highlights the best performing model.
+See [ollama.com/library](https://ollama.com/library) for all available models.
+
+## License
+
+MIT

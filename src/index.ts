@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import ollama from 'ollama';
 
 /**
@@ -169,4 +171,11 @@ export async function main(): Promise<void> {
 
   console.log(colorize(`${emojis.trophy} Best performing model:`, 'magenta'));
   console.log(colorize(`  ${bestModel.model} with ${bestModel.tokensPerSecond.toFixed(2)} tokens/second`, 'magenta'));
+}
+
+if (import.meta.url === import.meta.resolve(process.argv[1])) {
+  main().catch(error => {
+      console.error('Error:', error);
+      process.exit(1);
+  });
 }
