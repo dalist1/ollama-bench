@@ -1,5 +1,5 @@
-# Ollama Benchmark Script
-A command-line tool to benchmark and compare the performance of Ollama language models. Measures tokens per second, memory usage, and total processing time.
+# Ollama-bench
+A command-line tool to benchmark and compare the performance of Ollama language models. Measures tokens per second and total processing time.
 
 ## Setup
 
@@ -30,20 +30,20 @@ For Windows users, you can also run Ollama from the system tray after installati
 ### 3. Install Benchmark Tool
 Install globally:
 ```bash
-npm install -g ollama-benchmark
+npm install -g ollama-bench
 ```
 Or run directly with npx:
 ```bash
-npx ollama-benchmark <model1> [model2] [model3]
+npx ollama-bench <model1> [model2] [model3]
 ```
 
 ## Usage
 ```bash
 # Using global installation
-ollama-benchmark smollm:135m qwen2.5:0.5b
+ollama-bench smollm:135m qwen2.5:0.5b
 
 # Using npx (no installation required)
-npx ollama-benchmark smollm:135m qwen2.5:0.5b
+npx ollama-bench smollm:135m qwen2.5:0.5b
 ```
 
 ## Troubleshooting
