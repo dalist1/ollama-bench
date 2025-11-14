@@ -1,6 +1,6 @@
 {
     "name": "ollama-bench",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Minimal CLI tool to benchmark Ollama models with detailed phase analysis. Zero runtime dependencies.",
     "main": "dist/index.js",
     "type": "module",
