@@ -1,57 +1,46 @@
 # Ollama-bench
-A command-line tool to benchmark and compare the performance of Ollama language models. Measures tokens per second and total processing time.
 
-## Setup
+Minimal CLI tool to benchmark Ollama models with detailed phase analysis. Zero runtime dependencies.
 
-### 1. Install Ollama
-Choose your platform:
-- **Windows:** [Download Installer](https://ollama.com/download/OllamaSetup.exe)
-- **macOS:** [Download App](https://ollama.com/download/Ollama-darwin.zip)
-- **Linux:** Run:
-  ```bash
-  curl -fsSL https://ollama.com/install.sh | sh
-  ```
-- **Docker:** Pull and run:
-  ```bash
-  docker pull ollama/ollama
-  docker run -d -v ollama:/root/.ollama -p 11434:11434 ollama/ollama
-  ```
+## Features
 
-### 2. Start Ollama Server
-Before running any benchmarks, make sure the Ollama server is running:
+- Phase-by-phase performance breakdown
+- Precise timing measurements
+- Works with npm, pnpm, yarn, and bun
+
+## Quick Start
 
 ```bash
-# On Linux/macOS terminal or Windows PowerShell
-ollama serve
+# Run directly (no installation)
+npx ollama-bench qwen2.5:0.5b llama3.2:1b
+
+# Or with other package managers
+bunx ollama-bench qwen2.5:0.5b
+pnpm dlx ollama-bench qwen2.5:0.5b
 ```
 
-For Windows users, you can also run Ollama from the system tray after installation.
+## Prerequisites
 
-### 3. Install Benchmark Tool
-Install globally:
-```bash
-npm install -g ollama-bench
-```
-Or run directly with npx:
-```bash
-npx ollama-bench <model1> [model2] [model3]
-```
+1. **Install Ollama** - [ollama.com/download](https://ollama.com/download)
+2. **Start Ollama server** - Run `ollama serve`
 
-## Usage
-```bash
-# Using global installation
-ollama-bench smollm:135m qwen2.5:0.5b
+## Benchmark Phases
 
-# Using npx (no installation required)
-npx ollama-bench smollm:135m qwen2.5:0.5b
-```
+Each benchmark measures three distinct phases:
 
-## Troubleshooting
+**Phase 1: Model Loading** (Loading weights into memory)
+- Time to load model from disk into RAM
+- Hardware-dependent, very consistent
 
-If you encounter errors, check:
-1. Is the Ollama server running? (`ollama serve`)
-2. Can you access `http://localhost:11434`?
-3. Do you have enough RAM for your chosen models?
+**Phase 2: Prompt Processing** (Encoding input)
+- Time to encode and process your input prompt
+- Fast, scales with prompt length
+
+**Phase 3: Response Generation** (Creating output)
+- Time to generate the actual response
+- Most important metric for user-facing performance
+- Varies with content complexity
+
 
 ## Available Models
 

@@ -1,7 +1,7 @@
 {
     "name": "ollama-bench",
-    "version": "1.0.4",
-    "description": "A CLI tool to benchmark Ollama models performance",
+    "version": "1.1.0",
+    "description": "Minimal CLI tool to benchmark Ollama models with detailed phase analysis. Zero runtime dependencies.",
     "main": "dist/index.js",
     "type": "module",
     "bin": {
@@ -12,7 +12,7 @@
         "start": "node dist/index.js",
         "dev": "tsc && node dist/index.js"
     },
-    "keywords": ["ollama", "benchmark", "ai", "models", "cli"],
+    "keywords": ["ollama", "benchmark", "ai", "models", "cli", "performance", "llm", "testing"],
     "author": "dalist1",
     "license": "MIT",
     "repository": {
@@ -27,8 +27,8 @@
         "ollama": "latest"
     },
     "devDependencies": {
-        "@types/node": "^20.17.5",
-        "typescript": "^5.6.3"
+        "@types/node": "^20.19.25",
+        "typescript": "^5.9.3"
     },
     "engines": {
         "node": ">=14.0.0"

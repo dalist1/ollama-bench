@@ -8,11 +8,6 @@ import ollama from 'ollama';
 type Color = 'reset' | 'green' | 'yellow' | 'red' | 'cyan' | 'magenta' | 'blue';
 
 /**
- * Represents the available emoji keys.
- */
-type Emoji = 'rocket' | 'check' | 'error' | 'hourglass' | 'star' | 'trophy' | 'gear';
-
-/**
  * Object containing ANSI color codes for text coloring.
  */
 const colors: Record<Color, string> = {
@@ -23,19 +18,6 @@ const colors: Record<Color, string> = {
   cyan: '\x1b[36m',
   magenta: '\x1b[35m',
   blue: '\x1b[34m',
-};
-
-/**
- * Object containing emoji characters for various status indicators.
- */
-const emojis: Record<Emoji, string> = {
-  rocket: '🚀',
-  check: '✅',
-  error: '❌',
-  hourglass: '⏳',
-  star: '⭐',
-  trophy: '🏆',
-  gear: '⚙️',
 };
 
 /**
@@ -55,14 +37,14 @@ function colorize(text: string, color: Color): string {
  * @returns An interval ID for the animation.
  */
 function createLoadingAnimation(operation: string, model: string): NodeJS.Timeout {
-  const frames: string[] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const frames: string[] = ['|', '/', '-', '\\'];
   let i = 0;
   let dots = 0;
   return setInterval(() => {
     const frame = frames[i];
     const dotString = '.'.repeat(dots);
     const operationText = colorize(`${operation} ${model}${dotString}`, 'blue');
-    process.stdout.write(`\r${frame} ${emojis.gear} ${operationText}`.padEnd(50));
+    process.stdout.write(`\r${frame} ${operationText}`.padEnd(50));
     i = (i + 1) % frames.length;
     dots = (dots + 1) % 4;
   }, 100);
@@ -73,7 +55,7 @@ function createLoadingAnimation(operation: string, model: string): NodeJS.Timeou
  * @param model - The name of the model to pull.
  */
 async function pullModel(model: string): Promise<void> {
-  console.log(colorize(`${emojis.rocket} Initiating pull for ${model}...`, 'yellow'));
+  console.log(colorize(`Initiating pull for ${model}...`, 'yellow'));
   const loadingAnimation = createLoadingAnimation('Pulling', model);
   try {
     const start = performance.now();
@@ -83,13 +65,13 @@ async function pullModel(model: string): Promise<void> {
         clearInterval(loadingAnimation);
         const end = performance.now();
         const duration = (end - start) / 1000;
-        console.log(`\r${colorize(`${emojis.check} Successfully pulled ${model} in ${duration.toFixed(2)} seconds`, 'green')}     `);
+        console.log(`\r${colorize(`Successfully pulled ${model} in ${duration.toFixed(2)} seconds`, 'green')}     `);
         return;
       }
     }
   } catch (error) {
     clearInterval(loadingAnimation);
-    console.log(`\r${colorize(`${emojis.error} Error pulling ${model}: ${(error as Error).message}`, 'red')}     `);
+    console.log(`\r${colorize(`Error pulling ${model}: ${(error as Error).message}`, 'red')}     `);
   }
 }
 
@@ -99,6 +81,10 @@ async function pullModel(model: string): Promise<void> {
 interface BenchmarkResult {
   model: string;
   tokensPerSecond: number;
+  loadTime: number;
+  promptEvalTime: number;
+  generationTime: number;
+  totalTime: number;
 }
 
 /**
@@ -108,8 +94,10 @@ interface BenchmarkResult {
  */
 async function benchmarkModel(model: string): Promise<BenchmarkResult> {
   const prompt = "Explain the theory of relativity in simple terms.";
-  console.log(colorize(`${emojis.hourglass} Initiating benchmark for ${model}...`, 'cyan'));
-  const loadingAnimation = createLoadingAnimation('Benchmarking', model);
+  console.log(colorize(`\nBenchmarking ${model}`, 'cyan'));
+  console.log(colorize('─'.repeat(50), 'cyan'));
+  
+  const loadingAnimation = createLoadingAnimation('Running benchmark', model);
   
   try {
     const response = await ollama.generate({
@@ -119,20 +107,63 @@ async function benchmarkModel(model: string): Promise<BenchmarkResult> {
     });
 
     clearInterval(loadingAnimation);
-    const totalDuration = response.total_duration / 1e9; // Convert nanoseconds to seconds
-    const tokensPerSecond = response.eval_count / (response.eval_duration / 1e9);
+    process.stdout.write('\r' + ' '.repeat(50) + '\r');
 
-    console.log(`\r${colorize(`${emojis.star} Benchmark results for ${model}:`, 'cyan')}     `);
-    console.log(colorize(`  Total time: ${totalDuration.toFixed(2)} seconds`, 'yellow'));
-    console.log(colorize(`  Tokens generated: ${response.eval_count}`, 'yellow'));
-    console.log(colorize(`  Tokens per second: ${tokensPerSecond.toFixed(2)}`, 'yellow'));
+    // Calculate phase timings
+    const loadTime = response.load_duration / 1e9;
+    const promptEvalTime = response.prompt_eval_duration / 1e9;
+    const generationTime = response.eval_duration / 1e9;
+    const totalTime = response.total_duration / 1e9;
+    const tokensPerSecond = response.eval_count / generationTime;
+
+    // Calculate percentages
+    const loadPercent = (loadTime / totalTime * 100).toFixed(1);
+    const promptPercent = (promptEvalTime / totalTime * 100).toFixed(1);
+    const genPercent = (generationTime / totalTime * 100).toFixed(1);
+
+    // Display phases
+    console.log(colorize('Phase 1: Model Loading (Loading weights into memory)', 'yellow'));
+    console.log(colorize(`  Time: ${loadTime.toFixed(2)}s (${loadPercent}% of total)`, 'yellow'));
     console.log();
 
-    return { model, tokensPerSecond };
+    console.log(colorize('Phase 2: Prompt Processing (Encoding input)', 'yellow'));
+    console.log(colorize(`  Tokens: ${response.prompt_eval_count}`, 'yellow'));
+    console.log(colorize(`  Time: ${promptEvalTime.toFixed(2)}s (${promptPercent}% of total)`, 'yellow'));
+    console.log(colorize(`  Speed: ${(response.prompt_eval_count / promptEvalTime).toFixed(2)} tokens/s`, 'yellow'));
+    console.log();
+
+    console.log(colorize('Phase 3: Response Generation (Creating output)', 'yellow'));
+    console.log(colorize(`  Tokens: ${response.eval_count}`, 'yellow'));
+    console.log(colorize(`  Time: ${generationTime.toFixed(2)}s (${genPercent}% of total)`, 'yellow'));
+    console.log(colorize(`  Speed: ${tokensPerSecond.toFixed(2)} tokens/s`, 'yellow'));
+    console.log();
+
+    console.log(colorize('Summary', 'green'));
+    console.log(colorize(`  Total time: ${totalTime.toFixed(2)}s`, 'green'));
+    console.log(colorize(`  Generation speed: ${tokensPerSecond.toFixed(2)} tokens/s`, 'green'));
+    console.log();
+
+    return {
+      model,
+      tokensPerSecond,
+      loadTime,
+      promptEvalTime,
+      generationTime,
+      totalTime
+    };
   } catch (error) {
     clearInterval(loadingAnimation);
-    console.log(`\r${colorize(`${emojis.error} Error benchmarking ${model}: ${(error as Error).message}`, 'red')}     `);
-    return { model, tokensPerSecond: 0 };
+    process.stdout.write('\r' + ' '.repeat(50) + '\r');
+    console.log(colorize(`Error benchmarking ${model}: ${(error as Error).message}`, 'red'));
+    console.log();
+    return {
+      model,
+      tokensPerSecond: 0,
+      loadTime: 0,
+      promptEvalTime: 0,
+      generationTime: 0,
+      totalTime: 0
+    };
   }
 }
 
@@ -143,21 +174,23 @@ export async function main(): Promise<void> {
   const models = process.argv.slice(2);
 
   if (models.length === 0) {
-    console.log(colorize(`${emojis.error} Error: No models provided. Please specify at least one model.`, 'red'));
+    console.log(colorize(`Error: No models provided. Please specify at least one model.`, 'red'));
     process.exit(1);
   }
 
-  console.log(colorize(`${emojis.rocket} Ollama Benchmark Script`, 'cyan'));
-  console.log(colorize("=======================", 'cyan'));
+  console.log(colorize(`Ollama Benchmark Script`, 'cyan'));
+  console.log(colorize('═'.repeat(50), 'cyan'));
 
   // Pull models
+  console.log(colorize('\nPhase: Model Preparation', 'cyan'));
+  console.log(colorize('─'.repeat(50), 'cyan'));
   for (const model of models) {
     await pullModel(model);
   }
 
-  console.log();
-
   // Benchmark models
+  console.log(colorize('\nPhase: Performance Testing', 'cyan'));
+  console.log(colorize('─'.repeat(50), 'cyan'));
   const results: BenchmarkResult[] = [];
   for (const model of models) {
     const result = await benchmarkModel(model);
@@ -165,12 +198,15 @@ export async function main(): Promise<void> {
   }
 
   // Find the best performing model
-  const bestModel = results.reduce((best, current) => 
+  const bestModel = results.reduce((best, current) =>
     current.tokensPerSecond > best.tokensPerSecond ? current : best
   );
 
-  console.log(colorize(`${emojis.trophy} Best performing model:`, 'magenta'));
-  console.log(colorize(`  ${bestModel.model} with ${bestModel.tokensPerSecond.toFixed(2)} tokens/second`, 'magenta'));
+  console.log(colorize('Final Results', 'magenta'));
+  console.log(colorize('═'.repeat(50), 'magenta'));
+  console.log(colorize(`Best performing model: ${bestModel.model}`, 'magenta'));
+  console.log(colorize(`Generation speed: ${bestModel.tokensPerSecond.toFixed(2)} tokens/s`, 'magenta'));
+  console.log(colorize(`Total time: ${bestModel.totalTime.toFixed(2)}s`, 'magenta'));
 }
 
 if (import.meta.url === import.meta.resolve(process.argv[1])) {
