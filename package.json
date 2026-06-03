@@ -1,18 +1,23 @@
 {
     "name": "ollama-bench",
-    "version": "1.1.1",
-    "description": "Minimal CLI tool to benchmark Ollama models with detailed phase analysis. Zero runtime dependencies.",
+    "version": "1.2.0",
+    "description": "Minimal CLI tool to benchmark Ollama models — phase analysis, TTFT, reasoning/thinking measurement, and side-by-side ranking.",
     "main": "dist/index.js",
     "type": "module",
     "bin": {
         "ollama-bench": "./dist/index.js"
     },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
     "scripts": {
         "build": "tsc",
         "start": "node dist/index.js",
         "dev": "tsc && node dist/index.js"
     },
-    "keywords": ["ollama", "benchmark", "ai", "models", "cli", "performance", "llm", "testing"],
+    "keywords": ["ollama", "benchmark", "ai", "models", "cli", "performance", "llm", "testing", "ttft", "reasoning", "tokens-per-second"],
     "author": "dalist1",
     "license": "MIT",
     "repository": {
@@ -24,14 +29,14 @@
     },
     "homepage": "https://github.com/dalist1/ollama-bench#readme",
     "dependencies": {
-        "ollama": "latest"
+        "ollama": "^0.6.3"
     },
     "devDependencies": {
-        "@types/node": "^20.19.25",
+        "@types/node": "^20.19.41",
         "typescript": "^5.9.3"
     },
     "engines": {
-        "node": ">=14.0.0"
+        "node": ">=18.0.0"
     },
     "publishConfig": {
         "access": "public"
