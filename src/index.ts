@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-import { Ollama, type GenerateResponse, type ProgressResponse } from 'ollama';
+import {
+  Ollama,
+  type GenerateRequest,
+  type GenerateResponse,
+  type ModelResponse,
+  type ProgressResponse,
+} from 'ollama';
 
 /* -------------------------------------------------------------------------- */
 /*  Terminal styling                                                          */
@@ -156,6 +162,8 @@ interface BenchmarkResult {
   totalTime: number;
   // Streaming-derived metrics.
   ttft: number; // wall-clock seconds to first generated token
+  timeToFirstResponse: number; // wall-clock seconds to first visible answer token
+  wallTime: number; // end-to-end client-observed duration
   thinking: boolean;
   thinkingTime: number;
   thinkingChars: number;
@@ -165,7 +173,11 @@ interface BenchmarkResult {
   sizeVramBytes?: number;
   parameterSize?: string;
   quantization?: string;
+  contextLength?: number;
 }
+
+type ThinkLevel = 'low' | 'medium' | 'high' | 'max';
+type ThinkOption = boolean | ThinkLevel | undefined;
 
 /**
  * Parsed command-line options.
@@ -174,8 +186,12 @@ interface CliOptions {
   models: string[];
   prompt: string;
   runs: number;
-  think: boolean | 'high' | 'medium' | 'low' | undefined; // undefined = auto-detect
+  think: ThinkOption; // undefined = use the model/server default
   noThink: boolean;
+  forcePull: boolean;
+  numPredict: number;
+  seed: number;
+  keepAlive: string;
   json: boolean;
   host?: string;
   demo: boolean;
@@ -184,7 +200,8 @@ interface CliOptions {
 }
 
 const DEFAULT_PROMPT = 'Explain the theory of relativity in simple terms.';
-const TOOL_VERSION = '1.2.0';
+const TOOL_VERSION = '1.3.0';
+const THINK_LEVELS = new Set<ThinkLevel>(['low', 'medium', 'high', 'max']);
 
 /* -------------------------------------------------------------------------- */
 /*  Argument parsing                                                          */
@@ -193,13 +210,17 @@ const TOOL_VERSION = '1.2.0';
 /**
  * Parses process.argv into structured CLI options.
  */
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     models: [],
     prompt: DEFAULT_PROMPT,
     runs: 1,
     think: undefined,
     noThink: false,
+    forcePull: false,
+    numPredict: 256,
+    seed: 42,
+    keepAlive: '5m',
     json: false,
     demo: false,
     help: false,
@@ -208,28 +229,57 @@ function parseArgs(argv: string[]): CliOptions {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    const next = () => argv[++i];
+    const next = (option: string): string => {
+      const value = argv[++i];
+      if (value === undefined) throw new Error(`${option} requires a value`);
+      return value;
+    };
+    const positiveInt = (value: string, option: string): number => {
+      if (!/^\d+$/.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) {
+        throw new Error(`${option} must be a positive integer`);
+      }
+      return Number(value);
+    };
+    const integer = (value: string, option: string): number => {
+      if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new Error(`${option} must be an integer`);
+      }
+      return Number(value);
+    };
 
     if (arg === '-h' || arg === '--help') opts.help = true;
     else if (arg === '-v' || arg === '--version') opts.version = true;
     else if (arg === '--json') opts.json = true;
     else if (arg === '--demo') opts.demo = true;
+    else if (arg === '--pull') opts.forcePull = true;
     else if (arg === '--no-think') opts.noThink = true;
     else if (arg === '--think') opts.think = true;
     else if (arg.startsWith('--think=')) {
       const level = arg.slice('--think='.length);
-      opts.think = level === 'true' ? true : (level as 'high' | 'medium' | 'low');
-    } else if (arg === '--prompt') opts.prompt = next() ?? opts.prompt;
+      if (level === 'true') opts.think = true;
+      else if (level === 'false') opts.noThink = true;
+      else if (THINK_LEVELS.has(level as ThinkLevel)) opts.think = level as ThinkLevel;
+      else throw new Error('--think must be true, false, low, medium, high, or max');
+    } else if (arg === '--prompt') opts.prompt = next(arg);
     else if (arg.startsWith('--prompt=')) opts.prompt = arg.slice('--prompt='.length);
-    else if (arg === '--runs') opts.runs = Math.max(1, parseInt(next() ?? '1', 10) || 1);
-    else if (arg.startsWith('--runs=')) opts.runs = Math.max(1, parseInt(arg.slice('--runs='.length), 10) || 1);
-    else if (arg === '--host') opts.host = next();
+    else if (arg === '--runs') opts.runs = positiveInt(next(arg), arg);
+    else if (arg.startsWith('--runs=')) opts.runs = positiveInt(arg.slice('--runs='.length), '--runs');
+    else if (arg === '--tokens') opts.numPredict = positiveInt(next(arg), arg);
+    else if (arg.startsWith('--tokens=')) opts.numPredict = positiveInt(arg.slice('--tokens='.length), '--tokens');
+    else if (arg === '--seed') opts.seed = integer(next(arg), arg);
+    else if (arg.startsWith('--seed=')) opts.seed = integer(arg.slice('--seed='.length), '--seed');
+    else if (arg === '--keep-alive') opts.keepAlive = next(arg);
+    else if (arg.startsWith('--keep-alive=')) opts.keepAlive = arg.slice('--keep-alive='.length);
+    else if (arg === '--host') opts.host = next(arg);
     else if (arg.startsWith('--host=')) opts.host = arg.slice('--host='.length);
-    else if (arg.startsWith('-')) {
-      console.error(colorize(`Unknown option: ${arg}`, 'red'));
-      process.exit(1);
-    } else opts.models.push(arg);
+    else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
+    else if (!opts.models.includes(arg)) opts.models.push(arg);
   }
+
+  if (opts.noThink && opts.think !== undefined) {
+    throw new Error('--think and --no-think cannot be used together');
+  }
+  if (!opts.keepAlive) throw new Error('--keep-alive cannot be empty');
 
   return opts;
 }
@@ -247,11 +297,15 @@ ${b('USAGE')}
   ollama-bench [options] <model> [model...]
 
 ${b('OPTIONS')}
-  ${c('--think[=high|medium|low]')}  Enable reasoning/thinking (auto-detected by default)
+  ${c('--think[=low|medium|high|max]')} Set thinking or effort (model default if omitted)
   ${c('--no-think')}                 Disable thinking even for reasoning models
   ${c('--prompt <text>')}            Custom benchmark prompt
   ${c('--runs <n>')}                 Repeat each model n times and average (default: 1)
-  ${c('--host <url>')}               Ollama server URL (default: http://127.0.0.1:11434)
+  ${c('--tokens <n>')}               Maximum output tokens per run (default: 256)
+  ${c('--seed <n>')}                 Generation seed for repeatability (default: 42)
+  ${c('--keep-alive <duration>')}     Keep models loaded between runs (default: 5m)
+  ${c('--pull')}                     Refresh models even when already installed
+  ${c('--host <url>')}               Server URL (default: OLLAMA_HOST or localhost:11434)
   ${c('--json')}                     Emit machine-readable JSON instead of the report
   ${c('--demo')}                     Render the UI with synthetic data (no server needed)
   ${c('-v, --version')}              Print version
@@ -268,32 +322,34 @@ ${b('EXAMPLES')}
 /*  Ollama interactions                                                       */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Verifies the Ollama server is reachable, returning its version.
- * Exits with a friendly message when the server is unreachable.
- */
-async function ensureServer(client: Ollama): Promise<string> {
+/** Verifies that the configured Ollama API is reachable. */
+async function ensureServer(client: Ollama, directCloud: boolean): Promise<string> {
   try {
     const { version } = await client.version();
     return version;
   } catch {
-    console.error(colorize('✗ Could not reach the Ollama server.', 'red'));
-    console.error(colorize('  Is it running?  Start it with:  ollama serve', 'gray'));
-    process.exit(1);
+    if (directCloud) {
+      throw new Error('Could not reach the ollama.com API; check OLLAMA_API_KEY and your network');
+    }
+    throw new Error('Could not reach the Ollama server; start it with: ollama serve');
   }
 }
 
-/**
- * Returns the capability list for a model (e.g. ['completion', 'thinking', 'tools']).
- * Returns an empty array if the model is not present locally.
- */
-async function modelCapabilities(client: Ollama, model: string): Promise<string[]> {
-  try {
-    const info = await client.show({ model });
-    return info.capabilities ?? [];
-  } catch {
-    return [];
-  }
+/** Normalizes an omitted model tag to Ollama's documented `latest` default. */
+export function canonicalModelRef(model: string): string {
+  const lastSlash = model.lastIndexOf('/');
+  return model.lastIndexOf(':') > lastSlash ? model : `${model}:latest`;
+}
+
+/** Matches user model references against names returned by list/ps. */
+export function modelRefMatches(requested: string, candidate: string): boolean {
+  return canonicalModelRef(requested).toLowerCase() === canonicalModelRef(candidate).toLowerCase();
+}
+
+function findModel(models: ModelResponse[], requested: string): ModelResponse | undefined {
+  return models.find(
+    (model) => modelRefMatches(requested, model.name) || modelRefMatches(requested, model.model),
+  );
 }
 
 /**
@@ -329,6 +385,53 @@ async function pullModel(client: Ollama, model: string): Promise<boolean> {
   }
 }
 
+interface PreparedModel {
+  ready: boolean;
+  local?: ModelResponse;
+  error?: string;
+}
+
+/** Pulls only models that are missing, unless an explicit refresh was requested. */
+async function prepareModels(
+  client: Ollama,
+  models: string[],
+  forcePull: boolean,
+  directCloud: boolean,
+): Promise<Map<string, PreparedModel>> {
+  const prepared = new Map<string, PreparedModel>();
+
+  // The direct ollama.com API runs cloud models without a local pull step.
+  if (directCloud) {
+    for (const model of models) prepared.set(model, { ready: true });
+    return prepared;
+  }
+
+  let installed: ModelResponse[] = [];
+  try {
+    installed = (await client.list()).models;
+  } catch {
+    // Pulling is the safe fallback for older or API-compatible custom servers.
+    forcePull = true;
+  }
+
+  for (const model of models) {
+    const local = findModel(installed, model);
+    if (local && !forcePull) {
+      prepared.set(model, { ready: true, local });
+      continue;
+    }
+
+    const ready = await pullModel(client, model);
+    prepared.set(model, {
+      ready,
+      local,
+      error: ready ? undefined : `failed to pull model '${model}'`,
+    });
+  }
+
+  return prepared;
+}
+
 /**
  * The raw, per-run measurement captured from a single streamed generation.
  */
@@ -340,6 +443,8 @@ interface RunSample {
   evalCount: number;
   totalTime: number;
   ttft: number;
+  timeToFirstResponse: number;
+  wallTime: number;
   thinkingChars: number;
   thinkingWallTime: number;
 }
@@ -358,92 +463,110 @@ async function runOnce(
   client: Ollama,
   model: string,
   prompt: string,
-  think: CliOptions['think'],
+  think: ThinkOption,
+  numPredict: number,
+  seed: number,
+  keepAlive: string,
 ): Promise<RunSample> {
   const start = performance.now();
   let firstTokenAt = 0;
+  let firstResponseAt = 0;
   let thinkStartAt = 0;
-  let thinkEndAt = 0;
   let thinkingChars = 0;
   let final: GenerateResponse | undefined;
 
-  const stream = await client.generate({
+  // The current API supports `max`; ollama-js 0.6.3's declaration has not
+  // caught up yet, hence the narrow compatibility cast at this boundary.
+  const request = {
     model,
     prompt,
-    // Pass false explicitly so --no-think disables models whose default is to think.
     think,
     stream: true,
-  });
+    keep_alive: keepAlive,
+    options: { num_predict: numPredict, seed },
+  } satisfies Omit<GenerateRequest, 'think'> & { think?: ThinkOption; stream: true };
+  const stream = await client.generate(request as unknown as GenerateRequest & { stream: true });
 
   for await (const chunk of stream as AsyncIterable<GenerateResponse>) {
     const now = performance.now();
     if (chunk.thinking) {
       if (!thinkStartAt) thinkStartAt = now;
-      thinkEndAt = now;
       thinkingChars += chunk.thinking.length;
     }
+    if (chunk.response && !firstResponseAt) firstResponseAt = now;
     if ((chunk.response || chunk.thinking) && !firstTokenAt) firstTokenAt = now;
     if (chunk.done) final = chunk;
   }
 
   if (!final) throw new Error('No response received from server');
+  const end = performance.now();
 
   return {
-    loadTime: final.load_duration / 1e9,
-    promptEvalTime: final.prompt_eval_duration / 1e9,
-    promptEvalCount: final.prompt_eval_count,
-    generationTime: final.eval_duration / 1e9,
-    evalCount: final.eval_count,
-    totalTime: final.total_duration / 1e9,
+    loadTime: (final.load_duration ?? 0) / 1e9,
+    promptEvalTime: (final.prompt_eval_duration ?? 0) / 1e9,
+    promptEvalCount: final.prompt_eval_count ?? 0,
+    generationTime: (final.eval_duration ?? 0) / 1e9,
+    evalCount: final.eval_count ?? 0,
+    totalTime: (final.total_duration ?? 0) / 1e9,
     ttft: firstTokenAt ? (firstTokenAt - start) / 1000 : 0,
+    timeToFirstResponse: firstResponseAt ? (firstResponseAt - start) / 1000 : 0,
+    wallTime: (end - start) / 1000,
     thinkingChars,
-    thinkingWallTime: thinkStartAt ? (thinkEndAt - thinkStartAt) / 1000 : 0,
+    // Thinking precedes response chunks in Ollama's documented stream shape.
+    thinkingWallTime: thinkStartAt ? ((firstResponseAt || end) - thinkStartAt) / 1000 : 0,
   };
 }
 
 /**
  * Benchmarks a model across one or more runs and aggregates the results.
  */
-async function benchmarkModel(client: Ollama, model: string, opts: CliOptions): Promise<BenchmarkResult> {
-  // Decide whether to enable thinking.
-  let think: CliOptions['think'] = opts.think;
-  if (opts.noThink) think = false;
-  else if (think === undefined) {
-    const caps = await modelCapabilities(client, model);
-    think = caps.includes('thinking') ? true : false;
-  }
+function failedBenchmark(model: string, error: string): BenchmarkResult {
+  return {
+    model,
+    ok: false,
+    error,
+    runs: 0,
+    loadTime: 0,
+    promptEvalTime: 0,
+    promptEvalCount: 0,
+    promptTokensPerSecond: 0,
+    generationTime: 0,
+    evalCount: 0,
+    tokensPerSecond: 0,
+    totalTime: 0,
+    ttft: 0,
+    timeToFirstResponse: 0,
+    wallTime: 0,
+    thinking: false,
+    thinkingTime: 0,
+    thinkingChars: 0,
+    thinkingCharsPerSecond: 0,
+  };
+}
 
-  const label = think ? `${model} ${colorize('(thinking)', 'magenta')}` : model;
+async function benchmarkModel(
+  client: Ollama,
+  model: string,
+  opts: CliOptions,
+  local?: ModelResponse,
+): Promise<BenchmarkResult> {
+  // Omitting `think` uses Ollama's documented model default. This is faster
+  // than a show() capability probe and works for GPT-OSS, where true is ignored.
+  const think: ThinkOption = opts.noThink ? false : opts.think;
+  const thinkLabel = typeof think === 'string' ? `think=${think}` : 'thinking';
+  const label = think ? `${model} ${colorize(`(${thinkLabel})`, 'magenta')}` : model;
   const spinner = new Spinner(colorize(`Benchmarking ${label}…`, 'blue')).start();
 
   const samples: RunSample[] = [];
   try {
     for (let r = 0; r < opts.runs; r++) {
       if (opts.runs > 1) spinner.update(colorize(`Benchmarking ${label} — run ${r + 1}/${opts.runs}…`, 'blue'));
-      samples.push(await runOnce(client, model, opts.prompt, think));
+      samples.push(await runOnce(client, model, opts.prompt, think, opts.numPredict, opts.seed, opts.keepAlive));
     }
     spinner.stop();
   } catch (error) {
     spinner.stop();
-    return {
-      model,
-      ok: false,
-      error: (error as Error).message,
-      runs: 0,
-      loadTime: 0,
-      promptEvalTime: 0,
-      promptEvalCount: 0,
-      promptTokensPerSecond: 0,
-      generationTime: 0,
-      evalCount: 0,
-      tokensPerSecond: 0,
-      totalTime: 0,
-      ttft: 0,
-      thinking: false,
-      thinkingTime: 0,
-      thinkingChars: 0,
-      thinkingCharsPerSecond: 0,
-    };
+    return failedBenchmark(model, (error as Error).message);
   }
 
   // Average across runs.
@@ -458,18 +581,22 @@ async function benchmarkModel(client: Ollama, model: string, opts: CliOptions): 
   const thinkingWallTime = avg((s) => s.thinkingWallTime);
 
   // Pull resource usage for the (still-loaded) model.
-  let sizeBytes: number | undefined;
+  let sizeBytes = local?.size;
   let sizeVramBytes: number | undefined;
-  let parameterSize: string | undefined;
-  let quantization: string | undefined;
+  let parameterSize = local?.details?.parameter_size;
+  let quantization = local?.details?.quantization_level;
+  let contextLength: number | undefined;
   try {
     const { models } = await client.ps();
-    const live = models.find((m) => m.name === model || m.model === model);
+    const live = models.find(
+      (running) => modelRefMatches(model, running.name) || modelRefMatches(model, running.model),
+    ) as (ModelResponse & { context_length?: number }) | undefined;
     if (live) {
       sizeBytes = live.size;
       sizeVramBytes = live.size_vram;
       parameterSize = live.details?.parameter_size;
       quantization = live.details?.quantization_level;
+      contextLength = live.context_length;
     }
   } catch {
     /* ps() is best-effort */
@@ -488,6 +615,8 @@ async function benchmarkModel(client: Ollama, model: string, opts: CliOptions): 
     tokensPerSecond: rate(evalCount, generationTime),
     totalTime,
     ttft: avg((s) => s.ttft),
+    timeToFirstResponse: avg((s) => s.timeToFirstResponse),
+    wallTime: avg((s) => s.wallTime),
     thinking: thinkingChars > 0,
     thinkingTime: thinkingWallTime,
     thinkingChars,
@@ -498,6 +627,7 @@ async function benchmarkModel(client: Ollama, model: string, opts: CliOptions): 
     sizeVramBytes,
     parameterSize,
     quantization,
+    contextLength,
   };
 }
 
@@ -523,12 +653,19 @@ function renderResult(r: BenchmarkResult): void {
     console.log(`  ${label.padEnd(22)} ${colorize(value, 'bold')}  ${colorize(note, 'gray')}`);
 
   if (r.sizeBytes || r.parameterSize) {
-    const where = r.sizeVramBytes && r.sizeVramBytes > 0 ? 'GPU' : 'CPU';
+    let placement: string | undefined;
+    if (r.sizeVramBytes === 0) placement = 'CPU';
+    else if (r.sizeVramBytes && r.sizeBytes) {
+      const gpuPercent = Math.min(100, (r.sizeVramBytes / r.sizeBytes) * 100);
+      placement = gpuPercent >= 99.5 ? 'GPU' : `${gpuPercent.toFixed(0)}% GPU`;
+    } else if (r.sizeVramBytes) placement = 'GPU';
     const detail = [
       r.parameterSize,
       r.quantization,
       r.sizeBytes ? fmtBytes(r.sizeBytes) : undefined,
-      r.sizeVramBytes ? `${fmtBytes(r.sizeVramBytes)} VRAM · ${where}` : where,
+      r.contextLength ? `${r.contextLength.toLocaleString()} ctx` : undefined,
+      r.sizeVramBytes ? `${fmtBytes(r.sizeVramBytes)} VRAM` : undefined,
+      placement,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -541,10 +678,15 @@ function renderResult(r: BenchmarkResult): void {
   line('First token (TTFT)', fmtDuration(r.ttft));
   if (r.thinking) {
     line('Thinking', fmtDuration(r.thinkingTime), `${Math.round(r.thinkingChars)} chars · ${r.thinkingCharsPerSecond.toFixed(1)} chars/s`);
+    line('First answer token', r.timeToFirstResponse > 0 ? fmtDuration(r.timeToFirstResponse) : '—');
   }
-  line('Generation', fmtDuration(r.generationTime), `${Math.round(r.evalCount)} tok · ${pct(r.generationTime)} of total`);
+  line('Output eval', fmtDuration(r.generationTime), `${Math.round(r.evalCount)} tok · ${pct(r.generationTime)} of total`);
   console.log();
-  line(colorize('Speed', 'green'), colorize(fmtRate(r.tokensPerSecond), 'green'), colorize('total ' + fmtDuration(r.totalTime), 'gray'));
+  line(
+    colorize('Speed', 'green'),
+    colorize(fmtRate(r.tokensPerSecond), 'green'),
+    colorize(`server ${fmtDuration(r.totalTime)} · wall ${fmtDuration(r.wallTime)}`, 'gray'),
+  );
 }
 
 /**
@@ -612,6 +754,8 @@ function demoResults(): BenchmarkResult[] {
       tokensPerSecond: 168.4,
       totalTime: 2.4,
       ttft: 0.51,
+      timeToFirstResponse: 1.64,
+      wallTime: 2.43,
       thinking: true,
       thinkingTime: 1.13,
       thinkingChars: 640,
@@ -634,6 +778,8 @@ function demoResults(): BenchmarkResult[] {
       tokensPerSecond: 116.7,
       totalTime: 3.05,
       ttft: 0.66,
+      timeToFirstResponse: 0.66,
+      wallTime: 3.08,
       thinking: false,
       thinkingTime: 0,
       thinkingChars: 0,
@@ -657,6 +803,8 @@ function demoResults(): BenchmarkResult[] {
       tokensPerSecond: 0,
       totalTime: 0,
       ttft: 0,
+      timeToFirstResponse: 0,
+      wallTime: 0,
       thinking: false,
       thinkingTime: 0,
       thinkingChars: 0,
@@ -669,11 +817,21 @@ function demoResults(): BenchmarkResult[] {
 /*  Main                                                                      */
 /* -------------------------------------------------------------------------- */
 
+function isDirectCloudHost(host?: string): boolean {
+  if (!host) return false;
+  try {
+    const url = new URL(/^https?:\/\//i.test(host) ? host : `http://${host}`);
+    return url.hostname.toLowerCase() === 'ollama.com';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Orchestrates argument parsing, model preparation, benchmarking and output.
  */
-export async function main(): Promise<void> {
-  const opts = parseArgs(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  const opts = parseArgs(argv);
 
   if (opts.help) return printHelp();
   if (opts.version) {
@@ -697,8 +855,18 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const client = new Ollama(opts.host ? { host: opts.host } : undefined);
-  const serverVersion = await ensureServer(client);
+  const host = opts.host ?? process.env.OLLAMA_HOST;
+  const directCloud = isDirectCloudHost(host);
+  const apiKey = directCloud ? process.env.OLLAMA_API_KEY : undefined;
+  if (directCloud && !apiKey) {
+    throw new Error('OLLAMA_API_KEY is required when connecting directly to ollama.com');
+  }
+
+  const client = new Ollama({
+    ...(host ? { host } : {}),
+    ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
+  });
+  const serverVersion = await ensureServer(client, directCloud);
 
   if (!opts.json) {
     console.log(colorize('ollama-bench', 'cyan') + colorize(`  ·  server v${serverVersion}`, 'gray'));
@@ -707,8 +875,14 @@ export async function main(): Promise<void> {
     console.log(colorize('─'.repeat(52), 'gray'));
   }
 
-  for (const model of opts.models) {
-    await pullModel(client, model);
+  const prepared = await prepareModels(client, opts.models, opts.forcePull, directCloud);
+  if (!opts.json) {
+    for (const model of opts.models) {
+      const state = prepared.get(model);
+      if (directCloud) console.log(colorize(`  ✓ ${model} via ollama.com`, 'green'));
+      else if (state?.local && !opts.forcePull) console.log(colorize(`  ✓ ${model} already installed`, 'green'));
+      else if (!state?.ready) console.log(colorize(`  ✗ ${model} unavailable`, 'red'));
+    }
   }
 
   if (!opts.json) {
@@ -718,13 +892,27 @@ export async function main(): Promise<void> {
 
   const results: BenchmarkResult[] = [];
   for (const model of opts.models) {
-    const result = await benchmarkModel(client, model, opts);
+    const state = prepared.get(model);
+    const result = state?.ready
+      ? await benchmarkModel(client, model, opts, state.local)
+      : failedBenchmark(model, state?.error ?? `model '${model}' is unavailable`);
     results.push(result);
     if (!opts.json) renderResult(result);
   }
 
   if (opts.json) {
-    console.log(JSON.stringify({ server: serverVersion, prompt: opts.prompt, results }, null, 2));
+    console.log(JSON.stringify({
+      server: serverVersion,
+      prompt: opts.prompt,
+      settings: {
+        runs: opts.runs,
+        numPredict: opts.numPredict,
+        seed: opts.seed,
+        think: opts.noThink ? false : (opts.think ?? 'model-default'),
+        keepAlive: opts.keepAlive,
+      },
+      results,
+    }, null, 2));
   } else if (results.filter((r) => r.ok).length > 1) {
     renderTable(results);
   }
@@ -735,7 +923,8 @@ export async function main(): Promise<void> {
 
 if (import.meta.url === import.meta.resolve(process.argv[1])) {
   main().catch((error) => {
-    console.error('Error:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(colorize(`Error: ${message}`, 'red'));
     process.exit(1);
   });
 }

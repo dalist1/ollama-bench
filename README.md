@@ -1,99 +1,128 @@
 # Ollama-bench
 
-Minimal CLI tool to benchmark Ollama models with detailed phase-by-phase analysis — now with **time-to-first-token (TTFT)**, **reasoning/thinking** measurement, GPU/VRAM reporting, and a side-by-side ranking table.
+Minimal CLI for benchmarking Ollama models with server-authoritative phase timings, client-observed latency, reasoning measurement, and side-by-side rankings.
 
 ## Features
 
-- Phase-by-phase performance breakdown (load · prompt eval · generation)
-- **TTFT** (time to first token) — the metric that actually drives perceived latency
-- **Reasoning models**: auto-detects thinking-capable models and measures the thinking phase separately
-- Size / quantization / VRAM (GPU vs CPU) reporting via the live model state
-- Aligned **ranking table** when comparing multiple models
-- `--json` output for scripting and CI
-- Multi-run averaging, custom prompts, custom host
-- TTY-aware: colors/spinners on a terminal, clean plain text when piped (honors `NO_COLOR`)
+- Load, prompt-evaluation, and output-evaluation timings from Ollama's final stream event
+- **TTFT** (time to the first streamed output) plus end-to-end wall time
+- Thinking/reasoning support, including `low`, `medium`, `high`, and the latest `max` effort level
+- Separate first-answer latency and thinking-stream duration for reasoning models
+- Deterministic, bounded runs (`seed: 42`, maximum 256 output tokens by default)
+- Model size, quantization, context length, and CPU/GPU/partial-VRAM placement
+- Multi-run averaging and an aligned comparison table
+- Fast preparation: locally installed models are not pulled again unless `--pull` is used
+- Local servers, `OLLAMA_HOST`, and authenticated direct `ollama.com` cloud access
+- TTY-aware output and machine-readable JSON (`NO_COLOR` is honored)
 
-## Quick Start
+The implementation follows Ollama's current [Generate](https://docs.ollama.com/api/generate), [Usage](https://docs.ollama.com/api/usage), [Streaming](https://docs.ollama.com/api/streaming), [Thinking](https://docs.ollama.com/capabilities/thinking), and [Authentication](https://docs.ollama.com/api/authentication) documentation.
+
+## Quick start
 
 ```bash
-# Run directly (no installation)
 npx ollama-bench qwen3:0.6b llama3.2:1b
 
-# Or with other package managers
+# Also works with other package runners
 bunx ollama-bench qwen3:0.6b
 pnpm dlx ollama-bench qwen3:0.6b
 ```
 
 ## Prerequisites
 
-1. **Install Ollama** - [ollama.com/download](https://ollama.com/download)
-2. **Start Ollama server** - Run `ollama serve`
+For local models:
+
+1. [Install Ollama](https://ollama.com/download).
+2. Start it with `ollama serve`.
+
+For direct cloud API access, set the documented credentials and host:
+
+```bash
+export OLLAMA_API_KEY=your_api_key
+export OLLAMA_HOST=https://ollama.com
+ollama-bench gpt-oss:120b
+```
+
+An API key is only read automatically when the configured host is `ollama.com`; it is not sent to custom hosts.
 
 ## Usage
 
-```
+```text
 ollama-bench [options] <model> [model...]
 
 Options
-  --think[=high|medium|low]  Enable reasoning/thinking (auto-detected by default)
-  --no-think                 Disable thinking even for reasoning models
-  --prompt <text>            Custom benchmark prompt
-  --runs <n>                 Repeat each model n times and average (default: 1)
-  --host <url>               Ollama server URL (default: http://127.0.0.1:11434)
-  --json                     Emit machine-readable JSON instead of the report
-  --demo                     Render the UI with synthetic data (no server needed)
-  -v, --version              Print version
-  -h, --help                 Show this help
+  --think[=low|medium|high|max] Set thinking or effort (model default if omitted)
+  --no-think                    Disable thinking when the model supports it
+  --prompt <text>               Custom benchmark prompt
+  --runs <n>                    Repeat each model n times and average (default: 1)
+  --tokens <n>                  Maximum output tokens per run (default: 256)
+  --seed <n>                    Generation seed for repeatability (default: 42)
+  --keep-alive <duration>       Keep models loaded between runs (default: 5m)
+  --pull                        Refresh models even when already installed
+  --host <url>                  Server URL (default: OLLAMA_HOST or localhost:11434)
+  --json                        Emit machine-readable JSON
+  --demo                        Render synthetic UI data without a server
+  -v, --version                 Print version
+  -h, --help                    Show help
 ```
+
+Thinking is left unset by default so Ollama can apply the model's native behavior. This matters for models such as GPT-OSS, which use an effort level rather than a boolean. `--no-think` sends `false` explicitly, although models that cannot disable thinking may ignore it.
 
 ### Examples
 
 ```bash
-# Compare two models
+# Compare models with bounded, reproducible output
 ollama-bench qwen3:0.6b llama3.2:1b
 
-# Benchmark a reasoning model at high thinking effort, averaged over 3 runs
-ollama-bench --runs 3 --think=high deepseek-r1:1.5b
+# Three runs at the highest supported thinking effort
+ollama-bench --runs 3 --think=max deepseek-r1:1.5b
 
-# Custom prompt, JSON output for a script
-ollama-bench --prompt "Write a haiku about TCP" --json gemma3:1b > result.json
+# Shorter/faster run with a custom prompt
+ollama-bench --tokens 96 --prompt "Write a haiku about TCP" gemma3:1b
 
-# Preview the UI without an Ollama server
-ollama-bench --demo
+# Force a registry refresh and produce JSON
+ollama-bench --pull --json qwen3:0.6b > result.json
 ```
 
-## Benchmark Phases
+## Metrics
 
-Each benchmark measures these phases (timings come straight from the Ollama server):
+Ollama reports all server durations in nanoseconds in the final streamed event. Ollama-bench converts them to seconds and uses the documented formula `eval_count / eval_duration × 10^9` for output tokens/second.
 
-**Model Loading** — time to load weights into memory. Hardware-dependent, very consistent.
+- **Load**: server time spent loading the model.
+- **Prompt eval**: input-token processing time and rate.
+- **TTFT**: client wall time from request start to the first `thinking` or `response` chunk.
+- **Thinking**: time from the first thinking chunk to the first answer chunk (or stream end), plus exact streamed character count/rate.
+- **First answer token**: client wall time to visible response output for a thinking run.
+- **Output eval**: Ollama's aggregate output token count, duration, and rate. For thinking models this server metric can include reasoning output; Ollama does not expose a separate thinking token count.
+- **Server total / wall**: Ollama's `total_duration` alongside client-observed end-to-end duration.
 
-**Prompt Processing** — time to encode and process the input prompt. Fast, scales with prompt length.
-
-**Thinking** *(reasoning models only)* — the model's streamed thinking text, measured separately from the visible answer. Automatically enabled for thinking-capable models such as `qwen3` and `deepseek-r1`. Ollama does not expose separate thinking token counts, so ollama-bench reports exact thinking characters and chars/sec instead of estimating tokens.
-
-**Response Generation** — time to generate the output tokens. The most important metric for user-facing performance.
-
-Alongside the phases, ollama-bench reports **TTFT** (wall-clock time to the first streamed token) and the model's **size / quantization / VRAM** placement.
+A low `--tokens` value can be consumed entirely by a model's reasoning trace, in which case first-answer latency is unavailable. Increase `--tokens` when answer latency is important.
 
 ## JSON output
 
-`--json` writes a single JSON object to **stdout** (all progress goes to stderr, so the stream stays parseable):
+Progress is written to stderr, leaving stdout as one parseable JSON object:
 
 ```json
 {
   "server": "0.12.0",
   "prompt": "Explain the theory of relativity in simple terms.",
+  "settings": {
+    "runs": 1,
+    "numPredict": 256,
+    "seed": 42,
+    "think": "model-default",
+    "keepAlive": "5m"
+  },
   "results": [
     {
       "model": "qwen3:0.6b",
       "ok": true,
       "tokensPerSecond": 168.4,
       "ttft": 0.51,
+      "timeToFirstResponse": 1.64,
+      "wallTime": 2.43,
       "thinking": true,
       "thinkingTime": 1.13,
       "thinkingChars": 640,
-      "thinkingCharsPerSecond": 568,
       "loadTime": 0.42,
       "generationTime": 1.9,
       "totalTime": 2.4
@@ -102,9 +131,16 @@ Alongside the phases, ollama-bench reports **TTFT** (wall-clock time to the firs
 }
 ```
 
-## Available Models
+## Development
 
-See [ollama.com/library](https://ollama.com/library) for all available models.
+```bash
+bun install --frozen-lockfile
+bun run check
+```
+
+## Available models
+
+See [ollama.com/search](https://ollama.com/search) for local, thinking, and cloud models.
 
 ## License
 
